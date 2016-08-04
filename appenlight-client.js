@@ -23,20 +23,22 @@
         }
         return context;
     };
+    var logLevels = ['debug', 'info', 'warning', 'error', 'critical'];
 
     var AppEnlight = {
-        version: '0.4.2',
+        version: '0.5.0',
         options: {
             apiKey: ''
         },
         errorReportBuffer: [],
         slowReportBuffer: [],
         logBuffer: [],
-        requestInfo: null,
+        requestInfo: {},
         extraInfo: [],
         tags: [],
 
         init: function (options) {
+            options = options || {};
             var self = this;
             if (typeof options.server === 'undefined') {
                 options.server = 'https://api.appenlight.com';
@@ -63,8 +65,11 @@
             if (options.sendInterval >= 1000) {
                 this.createSendInterval(options.sendInterval);
             }
-            this.options = options;
-            this.requestInfo = {url: window.location.href};
+
+            for (var k in options) {
+                this.options[k] = options[k];
+            }
+
             this.reportsEndpoint = options.server +
                 '/api/reports?public_api_key=' + this.options.apiKey +
                 '&protocolVersion=' + this.options.protocolVersion;
@@ -85,6 +90,10 @@
                 self.sendReports();
                 self.sendLogs();
             }, timeIv);
+        },
+
+        clearRequestInfo: function () {
+            this.requestInfo = {};
         },
 
         setRequestInfo: function (info) {
@@ -111,6 +120,14 @@
             for (var i in info) {
                 this.tags.push([i, info[i]]);
             }
+        },
+
+        clearGlobalNamespace: function () {
+            this.options.namespace = undefined;
+        },
+
+        setGlobalNamespace: function (namespace) {
+            this.options.namespace = namespace;
         },
 
         grabError: function (exception, options) {
@@ -146,7 +163,8 @@
                 'request': {},
                 'traceback': [],
                 'extra': [],
-                'tags': []
+                'tags': [],
+                'url': window.location.href
             };
             report.user_agent = window.navigator.userAgent;
             report.start_time = new Date().toJSON();
@@ -158,11 +176,11 @@
             }
 
             if (this.extraInfo !== null) {
-                report.extra = this.extraInfo;
+                report.extra = report.extra.concat(this.extraInfo);
             }
 
             if (this.tags !== null) {
-                report.tags = this.tags;
+                report.tags = report.tags.concat(this.tags);
             }
 
             if (options && typeof options.extra !== 'undefined'){
@@ -211,23 +229,40 @@
             }
             this.errorReportBuffer.push(report);
         },
-        log: function (level, message, namespace, uuid) {
+        log: function (level, message, namespace, uuid, tags) {
             if (typeof namespace === 'undefined') {
-                namespace = window.location.pathname;
+                if (typeof this.options.namespace !== 'undefined') {
+                    namespace = this.options.namespace;
+                }
+                else {
+                    namespace = window.location.pathname;
+                }
             }
             if (typeof uuid === 'undefined') {
                 uuid = null;
             }
-            this.logBuffer.push(
-                {
-                    'log_level': level.toUpperCase(),
-                    'message': message,
-                    'date': new Date().toJSON(),
-                    'namespace': namespace
-                });
-            if (this.requestInfo !== null && typeof this.requestInfo.server !== 'undefined') {
-                this.logBuffer[this.logBuffer.length - 1].server = this.requestInfo.server;
+            var logInfo = {
+                'log_level': level.toUpperCase(),
+                'message': message,
+                'date': new Date().toJSON(),
+                'namespace': namespace,
+                'request_id': uuid
+            };
+
+            if (this.requestInfo && typeof this.requestInfo.server !== 'undefined') {
+                logInfo.server = this.requestInfo.server;
             }
+
+            if ((tags && tags.length > 0) || this.tags.length > 0) {
+                logInfo.tags = [].concat(this.tags);
+                if (tags) {
+                    for (var i in tags) {
+                        logInfo.tags.push([i, tags[i]]);
+                    }
+                }
+            }
+
+            this.logBuffer.push(logInfo);
         },
 
         genUUID4: function () {
@@ -268,6 +303,23 @@
             xhr.send(JSON.stringify(data));
         }
     };
+
+    // Create a function that calls through to the log method with the
+    // specified log level
+    function logLevelMethod(logLevel) {
+        return function() {
+            var args = [].slice.call(arguments);
+            args.unshift(logLevel);
+            return this.log.apply(this, args);
+        };
+    }
+
+    // Add methods for each log level
+    for (var i in logLevels) {
+        var logLevel = logLevels[i];
+        AppEnlight[logLevel] = logLevelMethod(logLevel);
+    }
+
     window.AppEnlight = AppEnlight;
 
     if (typeof define === 'function' && define.amd) {
